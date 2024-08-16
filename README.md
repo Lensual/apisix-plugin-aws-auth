@@ -43,7 +43,7 @@ conf/config.yaml
 
 ```yaml
 plugins:
-  - apisix-plugin-aws-auth
+  - aws-auth
 ```
 
 ## Install by extra_lua_path
@@ -52,7 +52,7 @@ conf/config.yaml
 
 ```yaml
 plugins:
-  - apisix-plugin-aws-auth
+  - aws-auth
 apisix:
   extra_lua_path: '/path/to/apisix-plugin-aws-auth/?.lua'
 ```
