@@ -1,7 +1,19 @@
-# invalid date
-# region check
-# service check
-# normal err code
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 
 use t::APISIX 'no_plan';
 
@@ -13,27 +25,7 @@ run_tests;
 
 __DATA__
 
-=== TEST 1: Utils Test: array_to_map
---- config
-location /t {
-    content_by_lua_block {
-        local utils = require("apisix.plugins.aws-auth.utils")
-
-        local map = utils.array_to_map({"foo", "bar"})
-        assert(map["foo"])
-        assert(map["bar"])
-
-        ngx.say("done")
-    }
-}
---- request
-GET /t
---- response_body
-done
-
-
-
-=== TEST 2: Utils Test: hmac256_bin
+=== TEST 1: Utils Test: hmac256_bin
 --- config
 location /t {
     content_by_lua_block {
@@ -51,7 +43,7 @@ f9320baf0249169e73850cd6156ded0106e2bb6ad8cab01b7bbbebe6d1065317
 
 
 
-=== TEST 3: Utils Test: sha256
+=== TEST 2: Utils Test: sha256
 --- config
 location /t {
     content_by_lua_block {
@@ -68,7 +60,7 @@ GET /t
 
 
 
-=== TEST 4: Utils Test: iso8601_to_timestamp
+=== TEST 3: Utils Test: iso8601_to_timestamp
 --- config
 location /t {
     content_by_lua_block {
@@ -85,7 +77,7 @@ GET /t
 
 
 
-=== TEST 5: Utils Test: aws_uri_encode: reserved characters
+=== TEST 4: Utils Test: aws_uri_encode: reserved characters
 --- config
 location /t {
     content_by_lua_block {
@@ -102,7 +94,7 @@ AZaz09-._~
 
 
 
-=== TEST 6: Utils Test: aws_uri_encode: space is reserved characters
+=== TEST 5: Utils Test: aws_uri_encode: space is reserved characters
 --- config
 location /t {
     content_by_lua_block {
@@ -119,7 +111,7 @@ GET /t
 
 
 
-=== TEST 7: Utils Test: aws_uri_encode: expect reserved characters
+=== TEST 6: Utils Test: aws_uri_encode: expect reserved characters
 --- config
 location /t {
     content_by_lua_block {
@@ -136,7 +128,7 @@ GET /t
 
 
 
-=== TEST 8: Utils Test: aws_uri_encode: encode path
+=== TEST 7: Utils Test: aws_uri_encode: encode path
 --- config
 location /t {
     content_by_lua_block {
@@ -153,7 +145,7 @@ GET /t
 
 
 
-=== TEST 9: Utils Test: build_canonical_uri: mixed (un)reserved characters
+=== TEST 8: Utils Test: build_canonical_uri: mixed (un)reserved characters
 --- config
 location /t {
     content_by_lua_block {
@@ -170,7 +162,7 @@ GET /t
 
 
 
-=== TEST 10: Utils Test: build_canonical_uri: empty uri string
+=== TEST 9: Utils Test: build_canonical_uri: empty uri string
 --- config
 location /t {
     content_by_lua_block {
@@ -187,7 +179,7 @@ GET /t
 
 
 
-=== TEST 11: Utils Test: build_canonical_uri: test slash
+=== TEST 10: Utils Test: build_canonical_uri: test slash
 --- config
 location /t {
     content_by_lua_block {
@@ -204,7 +196,7 @@ GET /t
 
 
 
-=== TEST 12: Utils Test: build_canonical_query_string
+=== TEST 11: Utils Test: build_canonical_query_string
 --- config
 location /t {
     content_by_lua_block {
@@ -226,7 +218,7 @@ marker=someMarker&max-keys=20&prefix=somePrefix
 
 
 
-=== TEST 13: Utils Test: build_canonical_query_string: with empty string value
+=== TEST 12: Utils Test: build_canonical_query_string: with empty string value
 --- config
 location /t {
     content_by_lua_block {
@@ -246,7 +238,7 @@ acl=
 
 
 
-=== TEST 14: Utils Test: build_canonical_query_string: with UriEncode
+=== TEST 13: Utils Test: build_canonical_query_string: with UriEncode
 --- config
 location /t {
     content_by_lua_block {
@@ -266,7 +258,7 @@ AZaz09-._~=%20%25%2F%3D
 
 
 
-=== TEST 15: Utils Test: build_canonical_headers: return canonical_headers
+=== TEST 14: Utils Test: build_canonical_headers: return canonical_headers
 --- config
 location /t {
     content_by_lua_block {
@@ -296,7 +288,7 @@ x-amz-storage-class:REDUCED_REDUNDANCY
 
 
 
-=== TEST 16: Utils Test: build_canonical_headers: return signed_headers
+=== TEST 15: Utils Test: build_canonical_headers: return signed_headers
 --- config
 location /t {
     content_by_lua_block {
@@ -320,7 +312,7 @@ date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class
 
 
 
-=== TEST 17: Utils Test: create_signing_key
+=== TEST 16: Utils Test: create_signing_key
 --- config
 location /t {
     content_by_lua_block {
@@ -351,7 +343,7 @@ dbb893acc010964918f1fd433add87c70e8b0db6be30c1fbeafefa5ec6ba8378
 
 
 
-=== TEST 18: Utils Test: generate_signature: GET Object
+=== TEST 17: Utils Test: generate_signature: GET Object
 --- config
 location /t {
     content_by_lua_block {
@@ -385,7 +377,7 @@ f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41
 
 
 
-=== TEST 19: Utils Test: generate_signature: PUT Object
+=== TEST 18: Utils Test: generate_signature: PUT Object
 --- config
 location /t {
     content_by_lua_block {
@@ -420,7 +412,7 @@ GET /t
 
 
 
-=== TEST 20: Utils Test: generate_signature: GET Bucket Lifecycle
+=== TEST 19: Utils Test: generate_signature: GET Bucket Lifecycle
 --- config
 location /t {
     content_by_lua_block {
@@ -456,7 +448,7 @@ fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543
 
 
 
-=== TEST 21: Utils Test: generate_signature: Get Bucket (List Objects)
+=== TEST 20: Utils Test: generate_signature: Get Bucket (List Objects)
 --- config
 location /t {
     content_by_lua_block {

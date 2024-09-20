@@ -36,7 +36,7 @@ run_tests;
 
 __DATA__
 
-=== TEST 1: config test: sanity
+=== TEST 1: Config Test: sanity
 --- config
     location /t {
         content_by_lua_block {
@@ -63,7 +63,7 @@ done
 
 
 
-=== TEST 2: config test: access_key missing
+=== TEST 2: Config Test: access_key missing
 --- config
     location /t {
         content_by_lua_block {
@@ -89,7 +89,7 @@ property "access_key" is required
 
 
 
-=== TEST 3: config test: secret_key missing
+=== TEST 3: Config Test: secret_key missing
 --- config
     location /t {
         content_by_lua_block {
@@ -115,7 +115,7 @@ property "secret_key" is required
 
 
 
-=== TEST 4: config test: add consumer with plugin aws-auth
+=== TEST 4: Config Test: add consumer with plugin aws-auth
 --- config
     location /t {
         content_by_lua_block {
@@ -146,7 +146,7 @@ passed
 
 
 
-=== TEST 5: config test: add aws auth plugin using admin api
+=== TEST 5: Config Test: add aws auth plugin using admin api
 --- config
     location /t {
         content_by_lua_block {

@@ -37,7 +37,7 @@ run_tests;
 
 __DATA__
 
-=== TEST 1: Verify by header: add consumer with plugin aws-auth
+=== TEST 1: Verify by Header: add consumer with plugin aws-auth
 --- config
     location /t {
         content_by_lua_block {
@@ -68,7 +68,7 @@ passed
 
 
 
-=== TEST 2: Verify by header: add aws auth plugin using admin api
+=== TEST 2: Verify by Header: add aws auth plugin using admin api
 --- config
     location /t {
         content_by_lua_block {
@@ -105,7 +105,7 @@ passed
 
 
 
-=== TEST 3: Verify by header: missing header Authentication
+=== TEST 3: Verify by Header: missing header Authentication
 --- request
 GET /hello
 --- error_code: 403
@@ -118,7 +118,7 @@ client request can't be validated: Missing Authentication Token
 
 
 
-=== TEST 4: Verify by header: empty Authentication header
+=== TEST 4: Verify by Header: empty Authentication header
 --- request
 GET /hello
 --- more_headers
@@ -129,15 +129,15 @@ x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b785
 x-amz-date: 20130524T000000Z
 --- error_code: 403
 --- response_body
-{"message":"Authorization header cannot be empty"}
+{"message":"Authorization header cannot be empty: ''"}
 --- grep_error_log eval
 qr/client request can't be validated: [^,]+/
 --- grep_error_log_out
-client request can't be validated: Authorization header cannot be empty
+client request can't be validated: Authorization header cannot be empty: ''
 
 
 
-=== TEST 5: Verify by header: Bad Authorization Header
+=== TEST 5: Verify by Header: Bad Authorization Header
 --- request
 GET /hello
 --- more_headers
@@ -156,7 +156,7 @@ client request can't be validated: Bad Authorization Header
 
 
 
-=== TEST 6: Verify by header: Credential: algorithm mistake
+=== TEST 6: Verify by Header: Credential: algorithm mistake
 --- request
 GET /hello
 --- more_headers
@@ -175,7 +175,7 @@ client request can't be validated: algorithm 'FAKE-ALGO' is not supported
 
 
 
-=== TEST 7: Verify by header: Credential: access key missing
+=== TEST 7: Verify by Header: Credential: access key missing
 --- request
 GET /hello
 --- more_headers
@@ -194,7 +194,7 @@ client request can't be validated: access key missing
 
 
 
-=== TEST 8: Verify by header: Credential: date missing
+=== TEST 8: Verify by Header: Credential: date missing
 --- request
 GET /hello
 --- more_headers
@@ -213,7 +213,7 @@ client request can't be validated: date missing
 
 
 
-=== TEST 9: Verify by header: Credential: region missing
+=== TEST 9: Verify by Header: Credential: region missing
 --- request
 GET /hello
 --- more_headers
@@ -232,7 +232,7 @@ client request can't be validated: region missing
 
 
 
-=== TEST 10: Verify by header: Credential: invalid region
+=== TEST 10: Verify by Header: Credential: invalid region
 --- request
 GET /hello
 --- more_headers
@@ -251,7 +251,7 @@ client request can't be validated: Credential should be scoped to a valid Region
 
 
 
-=== TEST 11: Verify by header: Credential: service missing
+=== TEST 11: Verify by Header: Credential: service missing
 --- request
 GET /hello
 --- more_headers
@@ -270,7 +270,7 @@ client request can't be validated: service missing
 
 
 
-=== TEST 12: Verify by header: Credential: invalid service
+=== TEST 12: Verify by Header: Credential: invalid service
 --- request
 GET /hello
 --- more_headers
@@ -289,7 +289,7 @@ client request can't be validated: Credential should be scoped to correct servic
 
 
 
-=== TEST 13: Verify by header: Credential: invalid terminator
+=== TEST 13: Verify by Header: Credential: invalid terminator
 --- request
 GET /hello
 --- more_headers
@@ -308,7 +308,7 @@ client request can't be validated: Credential should be scoped with a valid term
 
 
 
-=== TEST 14: Verify by header: signed_header: Host missing
+=== TEST 14: Verify by Header: signed_header: Host missing
 --- request
 GET /hello
 --- more_headers
@@ -319,15 +319,15 @@ x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b785
 x-amz-date: 20130524T000000Z
 --- error_code: 403
 --- response_body
-{"message":"header 'Host' must be signed"}
+{"message":"header 'Host' is not signed"}
 --- grep_error_log eval
 qr/client request can't be validated: [^,]+/
 --- grep_error_log_out
-client request can't be validated: header 'Host' must be signed
+client request can't be validated: header 'Host' is not signed
 
 
 
-=== TEST 15: Verify by header: signed_header: X-Amz-Date missing
+=== TEST 15: Verify by Header: signed_header: X-Amz-Date missing
 --- request
 GET /hello
 --- more_headers
@@ -338,15 +338,15 @@ x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b785
 x-amz-date: 20130524T000000Z
 --- error_code: 403
 --- response_body
-{"message":"header 'X-Amz-Date' must be signed"}
+{"message":"header 'X-Amz-Date' is not signed"}
 --- grep_error_log eval
 qr/client request can't be validated: [^,]+/
 --- grep_error_log_out
-client request can't be validated: header 'X-Amz-Date' must be signed
+client request can't be validated: header 'X-Amz-Date' is not signed
 
 
 
-=== TEST 17: Verify by header: clock_skew: Date in Credential scope is dismatch X-Amz-Date parameter
+=== TEST 16: Verify by Header: clock_skew: Date in Credential scope is dismatch X-Amz-Date parameter
 --- request
 GET /hello
 --- more_headers
@@ -365,36 +365,35 @@ client request can't be validated: Date in Credential scope does not match YYYYM
 
 
 
-=== TEST 18: Verify by header: clock_skew: Signature expired
+=== TEST 17: Verify by Header: clock_skew: Signature expired
 --- config
 location /t {
     content_by_lua_block {
-        local t = require("lib.test_admin")
+        local http  = require("resty.http")
         local utils = require("apisix.plugins.aws-auth.utils")
 
         local now       = os.time() - 100000
         local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
         local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
 
-        local method = ngx.HTTP_GET
-        local path = "/hello"
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = nil
+        local access_key = "AKIAIOSFODNN7EXAMPLE"
+        local secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
         local query_string = {}
-        local query_string_list = {}
-        for k,v in ipairs(query_string) do
-            table.insert(query_string_list, k .. "=" .. v)
-        end
+
         local headers = {}
         headers["Host"]                 = "examplebucket.s3.amazonaws.com"
         headers["x-amz-date"]           = amzdate
         headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body                      = nil
-        local access_key                = "AKIAIOSFODNN7EXAMPLE"
-        local secret_key                = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        local region                    = "us-east-1"
-        local service                   = "s3"
 
         local signature = utils.generate_signature(
-            ngx.req.get_method(method),
+            method,
             path,
             query_string,
             headers,
@@ -407,28 +406,34 @@ location /t {
 
         local _, signed_headers = utils.build_canonical_headers(headers)
         headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
+        .. "Credential=" .. credential .. ","
         .. "SignedHeaders=" .. signed_headers .. ","
         .. "Signature=" .. signature
 
+        local query_string_list = {}
+        for k,v in ipairs(query_string) do
+            table.insert(query_string_list, k .. "=" .. v)
+        end
         local query_string_str = ""
         if #query_string_list > 0 then
             query_string_str = "?" .. table.concat(query_string_list, "&")
         end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
         )
 
-        ngx.status = code
-        ngx.say(res_body)
+        ngx.status = res.status
+        ngx.print(res.body)
     }
 }
 --- request
@@ -443,36 +448,36 @@ qr/Signature expired: '.+' is now earlier than '.+'/
 
 
 
-=== TEST 19: Verify by header: clock_skew: Signature in the future
+=== TEST 18: Verify by Header: clock_skew: Signature in the future
 --- config
 location /t {
     content_by_lua_block {
-        local t = require("lib.test_admin")
+        local http  = require("resty.http")
         local utils = require("apisix.plugins.aws-auth.utils")
 
-        local now       = os.time() + 10000
+        local now       = os.time() + 100000
         local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
         local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
 
-        local method = ngx.HTTP_GET
-        local path = "/hello"
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = nil
+        local access_key = "AKIAIOSFODNN7EXAMPLE"
+        local secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
         local query_string = {}
-        local query_string_list = {}
-        for k,v in ipairs(query_string) do
-            table.insert(query_string_list, k .. "=" .. v)
-        end
+
         local headers = {}
         headers["Host"]                 = "examplebucket.s3.amazonaws.com"
         headers["x-amz-date"]           = amzdate
         headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body                      = nil
-        local access_key                = "AKIAIOSFODNN7EXAMPLE"
-        local secret_key                = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        local region                    = "us-east-1"
-        local service                   = "s3"
+       
 
         local signature = utils.generate_signature(
-            ngx.req.get_method(method),
+            method,
             path,
             query_string,
             headers,
@@ -485,28 +490,34 @@ location /t {
 
         local _, signed_headers = utils.build_canonical_headers(headers)
         headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
+        .. "Credential=" .. credential .. ","
         .. "SignedHeaders=" .. signed_headers .. ","
         .. "Signature=" .. signature
 
+        local query_string_list = {}
+        for k,v in ipairs(query_string) do
+            table.insert(query_string_list, k .. "=" .. v)
+        end
         local query_string_str = ""
         if #query_string_list > 0 then
             query_string_str = "?" .. table.concat(query_string_list, "&")
         end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
         )
 
-        ngx.status = code
-        ngx.say(res_body)
+        ngx.status = res.status
+        ngx.print(res.body)
     }
 }
 --- request
@@ -521,36 +532,35 @@ qr/Signature not yet current: '.+' is still later than '.+'/
 
 
 
-=== TEST 20: Verify by header: Success
+=== TEST 19: Verify by Header: Success
 --- config
 location /t {
     content_by_lua_block {
-        local t = require("lib.test_admin")
+        local http  = require("resty.http")
         local utils = require("apisix.plugins.aws-auth.utils")
 
         local now       = os.time()
         local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
         local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
 
-        local method = ngx.HTTP_GET
-        local path = "/hello"
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = nil
+        local access_key =  "AKIAIOSFODNN7EXAMPLE"
+        local secret_key =  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
         local query_string = {}
-        local query_string_list = {}
-        for k,v in ipairs(query_string) do
-            table.insert(query_string_list, k .. "=" .. v)
-        end
+
         local headers = {}
         headers["Host"] = "examplebucket.s3.amazonaws.com"
         headers["x-amz-date"] = amzdate
         headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body = nil
-        local access_key =  "AKIAIOSFODNN7EXAMPLE"
-        local secret_key =  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        local region = "us-east-1"
-        local service = "s3"
 
         local signature = utils.generate_signature(
-            ngx.req.get_method(method),
+            method,
             path,
             query_string,
             headers,
@@ -563,67 +573,72 @@ location /t {
 
         local _, signed_headers = utils.build_canonical_headers(headers)
         headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
+        .. "Credential=" .. credential .. ","
         .. "SignedHeaders=" .. signed_headers .. ","
         .. "Signature=" .. signature
 
+        local query_string_list = {}
+        for k,v in ipairs(query_string) do
+            table.insert(query_string_list, k .. "=" .. v)
+        end
         local query_string_str = ""
         if #query_string_list > 0 then
             query_string_str = "?" .. table.concat(query_string_list, "&")
         end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
         )
 
-        ngx.status = code
-        ngx.say(res_body)
+        ngx.status = res.status
+        ngx.print(res.body)
     }
 }
 --- request
 GET /t
 --- response_body
-passed
+hello world
 
 
 
-=== TEST 21: Verify by header: Consumer not found
+=== TEST 20: Verify by Header: Consumer not found
 --- config
 location /t {
     content_by_lua_block {
-        local t = require("lib.test_admin")
+        local http  = require("resty.http")
         local utils = require("apisix.plugins.aws-auth.utils")
 
         local now       = os.time()
         local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
         local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
 
-        local method = ngx.HTTP_GET
-        local path = "/hello"
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = nil
+        local access_key = "FAKE_ACCESS_KEY"
+        local secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
         local query_string = {}
-        local query_string_list = {}
-        for k,v in ipairs(query_string) do
-            table.insert(query_string_list, k .. "=" .. v)
-        end
+
         local headers = {}
         headers["Host"] = "examplebucket.s3.amazonaws.com"
         headers["x-amz-date"] = amzdate
         headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body = nil
-        local access_key =  "FAKE_ACCESS_KEY"
-        local secret_key =  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        local region = "us-east-1"
-        local service = "s3"
 
         local signature = utils.generate_signature(
-            ngx.req.get_method(method),
+            method,
             path,
             query_string,
             headers,
@@ -636,150 +651,77 @@ location /t {
 
         local _, signed_headers = utils.build_canonical_headers(headers)
         headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
+        .. "Credential=" .. credential .. ","
         .. "SignedHeaders=" .. signed_headers .. ","
         .. "Signature=" .. signature
 
-        local query_string_str = ""
-        if #query_string_list > 0 then
-            query_string_str = "?" .. table.concat(query_string_list, "&")
-        end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
-        )
-
-        ngx.status = code
-        ngx.print(res_body)
-    }
-}
---- request
-GET /t
---- error_code: 403
---- response_body
-{"message":"Invalid access key"}
---- grep_error_log eval
-qr/client request can't be validated: [^,]+/
---- grep_error_log_out
-client request can't be validated: Invalid access key
-
-
-
-=== TEST 22: Verify by header: Signature Dismatch
---- config
-location /t {
-    content_by_lua_block {
-        local t = require("lib.test_admin")
-        local utils = require("apisix.plugins.aws-auth.utils")
-
-        local now       = os.time()
-        local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
-        local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
-
-        local method = ngx.HTTP_GET
-        local path = "/hello"
-        local query_string = {}
         local query_string_list = {}
         for k,v in ipairs(query_string) do
             table.insert(query_string_list, k .. "=" .. v)
         end
-        local headers = {}
-        headers["Host"] = "examplebucket.s3.amazonaws.com"
-        headers["x-amz-date"] = amzdate
-        headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body = nil
-        local access_key =  "AKIAIOSFODNN7EXAMPLE"
-        local secret_key =  "FAKE_SECRET_KEY"
-        local region = "us-east-1"
-        local service = "s3"
-
-        local signature = utils.generate_signature(
-            ngx.req.get_method(method),
-            path,
-            query_string,
-            headers,
-            body,
-            secret_key,
-            now,
-            region,
-            service
-        )
-
-        local _, signed_headers = utils.build_canonical_headers(headers)
-        headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
-        .. "SignedHeaders=" .. signed_headers .. ","
-        .. "Signature=" .. signature
-
         local query_string_str = ""
         if #query_string_list > 0 then
             query_string_str = "?" .. table.concat(query_string_list, "&")
         end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
         )
 
-        ngx.status = code
-        ngx.print(res_body)
+        ngx.status = res.status
+        ngx.print(res.body)
     }
 }
 --- request
 GET /t
 --- error_code: 403
 --- response_body
-{"message":"The request signature we calculated does not match the signature you provided"}
+{"message":"The security token included in the request is invalid."}
 --- grep_error_log eval
 qr/client request can't be validated: [^,]+/
 --- grep_error_log_out
-client request can't be validated: The request signature we calculated does not match the signature you provided
+client request can't be validated: The security token included in the request is invalid.
 
 
 
-=== TEST 23: Verify by header: Exceed body limit size
+=== TEST 21: Verify by Header: Signature Dismatch
 --- config
 location /t {
     content_by_lua_block {
-        local t = require("lib.test_admin")
+        local http  = require("resty.http")
         local utils = require("apisix.plugins.aws-auth.utils")
 
         local now       = os.time()
         local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
         local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
 
-        local method = ngx.HTTP_GET
-        local path = "/hello"
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = nil
+        local access_key = "AKIAIOSFODNN7EXAMPLE"
+        local secret_key = "FAKE_SECRET_KEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
         local query_string = {}
-        local query_string_list = {}
-        for k,v in ipairs(query_string) do
-            table.insert(query_string_list, k .. "=" .. v)
-        end
+
         local headers = {}
         headers["Host"] = "examplebucket.s3.amazonaws.com"
         headers["x-amz-date"] = amzdate
         headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        local body = string.rep("A", 1024*1024)
-        local access_key =  "AKIAIOSFODNN7EXAMPLE"
-        local secret_key =  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        local region = "us-east-1"
-        local service = "s3"
 
         local signature = utils.generate_signature(
-            ngx.req.get_method(method),
+            method,
             path,
             query_string,
             headers,
@@ -792,28 +734,118 @@ location /t {
 
         local _, signed_headers = utils.build_canonical_headers(headers)
         headers["Authorization"] = "AWS4-HMAC-SHA256 "
-        .. "Credential="
-            .. access_key .. "/"
-            .. datestamp .. "/"
-            .. region .. "/"
-            .. service .. "/"
-            .. "aws4_request,"
+        .. "Credential=" .. credential .. ","
         .. "SignedHeaders=" .. signed_headers .. ","
         .. "Signature=" .. signature
 
+        local query_string_list = {}
+        for k,v in ipairs(query_string) do
+            table.insert(query_string_list, k .. "=" .. v)
+        end
         local query_string_str = ""
         if #query_string_list > 0 then
             query_string_str = "?" .. table.concat(query_string_list, "&")
         end
-        local code, res_body = t.test(path .. query_string_str,
-            method,
-            body,
-            nil,
-            headers
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
         )
 
-        ngx.status = code
-        ngx.print(res_body)
+        ngx.status = res.status
+        ngx.print(res.body)
+    }
+}
+--- request
+GET /t
+--- error_code: 403
+--- response_body
+{"message":"The request signature we calculated does not match the signature you provided."}
+--- grep_error_log eval
+qr/client request can't be validated: [^,]+/
+--- grep_error_log_out
+client request can't be validated: The request signature we calculated does not match the signature you provided.
+
+
+
+=== TEST 22: Verify by Header: Exceed body limit size
+--- config
+location /t {
+    content_by_lua_block {
+        local http  = require("resty.http")
+        local utils = require("apisix.plugins.aws-auth.utils")
+
+        local now       = os.time()
+        local amzdate   = os.date("!%Y%m%dT%H%M%SZ", now) -- ISO 8601 20130524T000000Z
+        local datestamp = os.date("!%Y%m%d", now)         -- Date w/o time, used in credential scope
+
+        local method     = "GET"
+        local path       = "/hello"
+        local body       = string.rep("A", 1024*1024)
+        local access_key = "AKIAIOSFODNN7EXAMPLE"
+        local secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        local region     = "us-east-1"
+        local service    = "s3"
+        local credential = table.concat({access_key, datestamp, region, service, "aws4_request"}, "/")
+
+        local query_string = {}
+
+        local headers = {}
+        headers["Host"] = "examplebucket.s3.amazonaws.com"
+        headers["x-amz-date"] = amzdate
+        headers["x-amz-content-sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+        local signature = utils.generate_signature(
+            method,
+            path,
+            query_string,
+            headers,
+            body,
+            secret_key,
+            now,
+            region,
+            service
+        )
+
+        local _, signed_headers = utils.build_canonical_headers(headers)
+        headers["Authorization"] = "AWS4-HMAC-SHA256 "
+        .. "Credential=" .. credential .. ","
+        .. "SignedHeaders=" .. signed_headers .. ","
+        .. "Signature=" .. signature
+
+        local query_string_list = {}
+        for k,v in ipairs(query_string) do
+            table.insert(query_string_list, k .. "=" .. v)
+        end
+        local query_string_str = ""
+        if #query_string_list > 0 then
+            query_string_str = "?" .. table.concat(query_string_list, "&")
+        end
+
+        local httpc = http.new()
+        local uri = ngx.var.scheme .. "://" .. ngx.var.server_addr
+          .. ":" .. ngx.var.server_port .. path
+        local res, err = httpc:request_uri(uri,
+            {
+                method = method,
+                body = body,
+                keepalive = false,
+                headers = headers,
+                query = query_string
+            }
+        )
+
+        ngx.status = res.status
+        ngx.print(res.body)
     }
 }
 --- request
@@ -825,6 +857,3 @@ GET /t
 qr/client request can't be validated: [^,]+/
 --- grep_error_log_out
 client request can't be validated: Exceed body limit size
-
-
-

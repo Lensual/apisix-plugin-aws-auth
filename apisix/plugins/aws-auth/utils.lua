@@ -16,17 +16,16 @@
 --
 
 local require        = require
-local core           = require("apisix.core")
 local hmac           = require("resty.hmac")
 local resty_sha256   = require("resty.sha256")
 local hex_encode     = require("resty.string").to_hex
 local pairs          = pairs
-local ipairs         = ipairs
 local tab_concat     = table.concat
 local tab_sort       = table.sort
 local tab_insert     = table.insert
 local ngx            = ngx
 local ngx_escape_uri = ngx.escape_uri
+local ngx_re_match   = ngx.re.match
 local ngx_re_gmatch  = ngx.re.gmatch
 local str_strip      = require("pl.stringx").strip
 
@@ -34,20 +33,6 @@ local ALGO           = "AWS4-HMAC-SHA256"
 
 local _M             = {}
 
-
---- array_to_map
----
---- convert array to hashmap, easy to find keys
---- @param arr any[]
---- @return table<any, true>
-function _M.array_to_map(arr)
-    local map = core.table.new(0, #arr)
-    for _, v in ipairs(arr) do
-        map[v] = true
-    end
-
-    return map
-end
 
 --- hmac256_bin
 ---
@@ -79,24 +64,19 @@ end
 --- @return integer timestamp utc
 function _M.iso8601_to_timestamp(iso8601)
     -- Extract date and time components from the ISO 8601 string
-    local year, month, day, hour, min, sec = iso8601:match("(%d%d%d%d)(%d%d)(%d%d)T(%d%d)(%d%d)(%d%d)Z")
-
-    -- Convert the extracted components to numbers
-    year = tonumber(year)
-    month = tonumber(month)
-    day = tonumber(day)
-    hour = tonumber(hour)
-    min = tonumber(min)
-    sec = tonumber(sec)
+    local match, err = ngx_re_match(iso8601, [[(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z]], "oj")
+    if err then
+        error(err)
+    end
 
     -- Create a table compatible with os.time
     local datetime = {
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        min = min,
-        sec = sec
+        year = tonumber(match[1]),
+        month = tonumber(match[2]),
+        day = tonumber(match[3]),
+        hour = tonumber(match[4]),
+        min = tonumber(match[5]),
+        sec = tonumber(match[6])
     }
 
     -- Convert to Unix timestamp
@@ -134,7 +114,7 @@ function _M.aws_uri_encode(value, path)
     -- other to pass
     -- (%[A-Z0-9]{2})      uri encoded
     -- [A-Za-z0-9\-\._\~]  reserved characters
-    local iterator, err = ngx_re_gmatch(encoded, "!|\\*|\\(|\\)|'|%2F|(%[A-Z0-9]{2})|[A-Za-z0-9\\-\\._\\~]", "o")
+    local iterator, err = ngx_re_gmatch(encoded, "!|\\*|\\(|\\)|'|%2F|(%[A-Z0-9]{2})|[A-Za-z0-9\\-\\._\\~]", "oj")
     if not iterator then
         error(err)
     end
@@ -219,8 +199,7 @@ end
 --- build_canonical_headers
 ---
 --- @param headers table<string, string>
---- @return string canonical_headers
---- @return string signed_headers
+--- @return string canonical_headers, string signed_headers
 function _M.build_canonical_headers(headers)
     local canonical_headers_table, signed_headers_list = {}, {}
     local signed_headers_i = 0
@@ -263,11 +242,11 @@ end
 ---
 --- @param method string
 --- @param uri string
---- @param query_string table<string, string> | nil
---- @param headers table<string, string> | nil
---- @param body string | nil
+--- @param query_string table<string, string>? The Request Query String should not include Signature like 'X-Amz-Signature'
+--- @param headers table<string, string>? The Request Headers should not include Signature like 'X-Amz-Signature'
+--- @param body string?
 --- @param secret_key string
---- @param time integer utc
+--- @param time integer UTC seconds timestamp
 --- @param region string
 --- @param service string
 --- @return string signature

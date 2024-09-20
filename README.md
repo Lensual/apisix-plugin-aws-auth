@@ -16,18 +16,18 @@ NOTE: `encrypt_fields = {"access_key", "secret_key"}` is also defined in the sch
 
 For Route:
 
-| Name                       | Type            | Requirement | Default                | Description                                                                                                                                                                                                            |
-| -------------------------- | --------------- | ----------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| region                     | string          | optional    |                        | Region to validate. Without validate if not provided.                                                                                                                                                                  |
-| service                    | string          | optional    |                        | Service to validate. Without validate if not provided.                                                                                                                                                                 |
-| clock_skew                 | integer         | optional    | 60 \* 15               | Clock skew allowed by the signature in seconds. The default value is 900 seconds (15 minutes). If `X-Amz-Date` is not in request parameter, an error will occur. Setting it to 0 will skip checking the date (UNSAFE). |
-| must_sign_headers          | array of string | optional    | ["Host", "X-Amz-Date"] | The headers must be signed. According to the [AWS v4 signature](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_aws-signing.html), at least `host` and `X-Amz-Date` are required. Case insensitive.         |
-| max_req_body               | integer         | optional    | 1024 \* 512            | Max request body size. The default value is 512 KiB.                                                                                                                                                                   |
-| enable_header_method       | boolean         | optional    | true                   | Enable [HTTP authorization header](https://docs.aws.amazon.com/IAM/latest/UserGuide/aws-signing-authentication-methods.html#aws-signing-authentication-methods-http) method. The default is true.                      |
-| enable_query_string_method | boolean         | optional    | true                   | Enable [Query string parameters](https://docs.aws.amazon.com/IAM/latest/UserGuide/aws-signing-authentication-methods.html#aws-signing-authentication-methods-query) method. The default is true.                       |
-| max_expires                | integer         | optional    | 60 \* 60 \* 24 \* 7    | TODO Sets the maximum value allowed for the `X-Amz-Expires` parameter. The default value is 604800 seconds (7 days). Setting it to 0 will skip checking exprires limit (UNSAFE).                                       |
-| keep_unsigned_headers      | boolean         | optional    | false                  | TODO Whether to keep the unsigned request header. The default is false.                                                                                                                                                |
-| keep_unsigned_query_string | boolean         | optional    | false                  | TODO Whether to keep the unsigned request query string. The default is false.                                                                                                                                          |
+| Name                       | Type            | Requirement | Default             | Description                                                                                                                                                                                                            |
+| -------------------------- | --------------- | ----------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| host                       | string          | optional    |                     | Host to validate. Without validate if not provided.                                                                                                                                                                    |
+| region                     | string          | optional    |                     | Region to validate. Without validate if not provided.                                                                                                                                                                  |
+| service                    | string          | optional    |                     | Service to validate. Without validate if not provided.                                                                                                                                                                 |
+| clock_skew                 | integer         | optional    | 60 \* 15            | Clock skew allowed by the signature in seconds. The default value is 900 seconds (15 minutes). If `X-Amz-Date` is not in request parameter, an error will occur. Setting it to 0 will skip checking the date (UNSAFE). |
+| max_req_body               | integer         | optional    | 1024 \* 512         | Max Request Body size. The default value is 512 KiB.                                                                                                                                                                   |
+| enable_header_method       | boolean         | optional    | true                | Enable [HTTP authorization header](https://docs.aws.amazon.com/IAM/latest/UserGuide/aws-signing-authentication-methods.html#aws-signing-authentication-methods-http) method. The default is true.                      |
+| enable_query_string_method | boolean         | optional    | true                | Enable [Query string parameters](https://docs.aws.amazon.com/IAM/latest/UserGuide/aws-signing-authentication-methods.html#aws-signing-authentication-methods-query) method. The default is true.                       |
+| max_expires                | integer         | optional    | 60 \* 60 \* 24 \* 7 | Sets the maximum value allowed for the `X-Amz-Expires` parameter. The default value is 604800 seconds (7 days). Setting it to 0 will skip checking exprires limit (UNSAFE).                                            |
+| extra_must_sign_headers    | array of string | optional    |                     | The Request Headers that must be signed. Case insensitive.                                                                                                                                                             |
+| keep_unsigned_headers      | boolean         | optional    | false               | Whether to keep the Unsigned Request Header. The default is false.                                                                                                                                                     |
 
 ## Install
 
@@ -57,13 +57,12 @@ apisix:
 
 ## TODO
 
-- [ ] keep headers & qs
-- [ ] review
+- [ ] test query string method
+- [ ] PR to apisix
 - [ ] documents
-  - [ ] review log
+- [ ] review log
 - [ ] translate documents & comment
-- [ ] v4a signature ?
-- [ ] unit test
+- [ ] review test
 
 ## License
 

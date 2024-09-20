@@ -23,9 +23,14 @@ local ngx_re_split         = ngx_re.split
 local ngx_re_match         = ngx.re.match
 local abs                  = math.abs
 local core                 = require("apisix.core")
+local core_schema          = require("apisix.core.schema")
 local consumer             = require("apisix.consumer")
+local pairs                = pairs
 local ipairs               = ipairs
 
+local utils                = require("apisix.plugins.aws-auth.utils")
+
+local HOST_KEY             = "Host"
 local ALGORITHM_KEY        = "X-Amz-Algorithm"
 local CREDENTIAL_KEY       = "X-Amz-Credential"
 local DATE_KEY             = "X-Amz-Date"
@@ -38,24 +43,27 @@ local DEFAULT_CLOCK_SKEW   = 60 * 15
 local DEFAULT_MAX_EXPIRES  = 60 * 60 * 24 * 7
 local ALGO                 = "AWS4-HMAC-SHA256"
 
-local utils                = require("apisix.plugins.aws-auth.utils")
 
 --- @class Config
---- @field region string
---- @field service string
---- @field clock_skew integer
---- @field must_sign_headers string[]
---- @field max_req_body integer
---- @field enable_header_method boolean
---- @field enable_query_string_method boolean
---- @field max_expires integer
---- @field keep_unsigned_headers boolean
---- @field keep_unsigned_query_string boolean
-
+--- @field host string?
+--- @field region string?
+--- @field service string?
+--- @field clock_skew integer?
+--- @field extra_must_sign_headers string[]?
+--- @field max_req_body integer?
+--- @field enable_header_method boolean?
+--- @field enable_query_string_method boolean?
+--- @field max_expires integer?
+--- @field keep_unsigned_headers boolean?
 
 local schema = {
     type = "object",
     properties = {
+        host                       = {
+            type = "string",
+            title = "Host to validate. Without validate if not provided.",
+            default = nil,
+        },
         region                     = {
             type = "string",
             title = "Region to validate. Without validate if not provided.",
@@ -74,16 +82,14 @@ local schema = {
                 .. "Setting it to 0 will skip checking the date (UNSAFE).",
             default = DEFAULT_CLOCK_SKEW
         },
-        must_sign_headers          = {
+        extra_must_sign_headers    = {
             type    = "array",
             items   = {
                 type = "string"
             },
-            title   = "The headers must be signed. "
-                .. "According to the [AWS v4 signature](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_aws-signing.html), "
-                .. "at least `host` and `X-Amz-Date` are required. "
+            title   = "The Request Headers that must be signed. "
                 .. "Case insensitive.",
-            default = { "Host", DATE_KEY }
+            default = nil
         },
         max_req_body               = {
             type    = "integer",
@@ -114,23 +120,17 @@ local schema = {
         },
         keep_unsigned_headers      = {
             type    = "boolean",
-            title   = "Whether to keep the unsigned request header. "
+            title   = "Whether to keep the Unsigned Request Header. "
                 .. "The default is false.",
             default = false,
         },
-        keep_unsigned_query_string = {
-            type    = "boolean",
-            title   = "Whether to keep the unsigned request query string. "
-                .. "The default is false.",
-            default = false,
-        },
-        -- TODO host check
-        -- TODO enable_header_method enable_query_string_method check
-        -- TODO clock_skew and must_sign_headers check
-        -- TODO clock_skew and max_expires check
     },
 }
 
+
+--- @class ConsumerConfig
+--- @field access_key string?
+--- @field secret_key string?
 
 local consumer_schema = {
     type           = "object",
@@ -159,184 +159,34 @@ local _M = {
 
 --- check_schema
 ---
---- @param conf Config
---- @param schema_type unknown
---- @return boolean ok, string err
+--- @param conf Config|ConsumerConfig|unknown
+--- @param schema_type integer
+--- @return boolean ok, string? err
 function _M.check_schema(conf, schema_type)
     core.log.info("input conf: ", core.json.delay_encode(conf))
 
-    if schema_type == core.schema.TYPE_CONSUMER then
-        return core.schema.check(consumer_schema, conf)
+    if schema_type == core_schema.TYPE_CONSUMER then
+        return core_schema.check(consumer_schema, conf)
     else
-        return core.schema.check(schema, conf)
+        return core_schema.check(schema, conf)
     end
 end
 
--- TODO check plugin schema
-
-
---- get_consumer
+--- parse_credential
 ---
---- @param access_key string
---- @return unknown | nil consumer
---- @return string | nil error
-local function get_consumer(access_key)
-    if not access_key then
-        return nil, "missing access key"
-    end
-
-    local consumer_conf = consumer.plugin(plugin_name)
-    if not consumer_conf then
-        return nil, "Missing related consumer"
-    end
-
-    local consumers = consumer.consumers_kv(plugin_name, consumer_conf, "access_key")
-    if not consumers then
-        return nil, "Invalid access key"
-    end
-    local consumer = consumers[access_key]
-    if not consumer then
-        return nil, "Invalid access key"
-    end
-
-    core.log.info("consumer: ", core.json.delay_encode(consumer))
-
-    return consumer, nil
-end
-
-
---- validate
----
---- @param conf Config
---- @param params unknown
---- @return unknown | nil consumer
---- @return string | nil error
-local function validate(conf, params)
-    if params.algorithm ~= ALGO then
-        return nil, "algorithm '" .. params.algorithm .. "' is not supported"
-    end
-
-    if conf.region and #conf.region > 0 then
-        if (not params.credential.region) or params.credential.region ~= conf.region then
-            return nil, "Credential should be scoped to a valid Region, not '" .. params.credential.region .. "'"
-        end
-    end
-
-    if conf.service and #conf.service > 0 then
-        if (not params.credential.service) or params.credential.service ~= conf.service then
-            return nil, "Credential should be scoped to correct service: '" .. params.credential.service .. "'"
-        end
-    end
-
-    -- check headers
-    local signed_headers_map = utils.array_to_map(params.signed_headers)
-    if conf.must_sign_headers and #conf.must_sign_headers > 0 then
-        for _, must in ipairs(conf.must_sign_headers) do
-            if not signed_headers_map[must:lower()] then
-                return nil, "header '" .. must .. "' must be signed"
-            end
-        end
-    end
-
-    -- check clock skew
-    local now = ngx_time()
-    local time_to_validate = utils.iso8601_to_timestamp(params.date)
-    local skew = now - time_to_validate
-    core.log.info("conf.clock_skew: ", conf.clock_skew)
-    if (conf.clock_skew and conf.clock_skew > 0) then
-        if not signed_headers_map[DATE_KEY:lower()] then
-            return nil, "'" .. DATE_KEY .. "' is not signed"
-        end
-
-        if params.date:sub(1, 8) ~= params.credential.date then
-            return nil, "Date in Credential scope does not match YYYYMMDD from ISO-8601 version of date from HTTP"
-        end
-
-        core.log.info("Clock skew: ", skew .. "=" .. now .. "-" .. time_to_validate)
-        if skew > conf.clock_skew then
-            return nil, "Signature expired: '" .. params.date .. "' is now earlier than '" .. now .. "'"
-        elseif skew < 0 then
-            return nil, "Signature not yet current: '" .. params.date .. "' is still later than '" .. now .. "'"
-        end
-    end
-
-    -- check X-Amz-Expires
-    if params.is_query_string_method then
-        if not params.expires then
-            return nil, "TODO 这是必须检查amz_expires的情况"
-        end
-
-        if conf.max_expires and conf.max_expires > 0 then
-            if params.expires > conf.max_expires then
-                return nil, "max_expires limited" --TODO test
-            end
-        end
-
-        if abs(skew) > params.expires then
-            return nil, "Signature expired: '" .. params.date .. "' is now earlier than '" .. now .. "'"
-        end
-    end
-
-
-    -- get consumer
-    local consumer, err = get_consumer(params.credential.access_key)
-    if err or (not consumer) then
-        return nil, err
-    end
-
-    -- calc signature
-    local headers_to_signature = {}
-    for _, header_name in ipairs(params.signed_headers) do
-        headers_to_signature[header_name] = params.headers[header_name]
-    end
-
-    local qs_to_signature = {}
-    if params.is_query_string_method then
-        qs_to_signature = {}
-        for _, qs_name in ipairs(params.query_string) do
-            if qs_name ~= ALGORITHM_KEY
-                and qs_name ~= CREDENTIAL_KEY
-                and qs_name ~= DATE_KEY
-                and qs_name ~= EXPIRES_KEY
-                and qs_name ~= SIGNED_HEADERS_KEY
-                and qs_name ~= SIGNATURE_KEY then
-                qs_to_signature[qs_name] = params.headers[qs_name]
-            end
-        end
-    end
-
-    local consumer_auth_conf  = consumer.auth_conf
-    local secret_key          = consumer_auth_conf and consumer_auth_conf.secret_key
-    local request_signature   = params.signature
-    local generated_signature = utils.generate_signature(
-        params.method,
-        params.uri,
-        qs_to_signature,
-        headers_to_signature,
-        params.body,
-        secret_key,
-        time_to_validate,
-        params.credential.region,
-        params.credential.service
-    )
-
-    core.log.info("request_signature: ", request_signature,
-        " generated_signature: ", generated_signature)
-
-    if request_signature ~= generated_signature then
-        return nil, "The request signature we calculated does not match the signature you provided"
-    end
-
-    return consumer
-end
-
-
-local function parse_credential(credential)
-    local credential_data = ngx_re_split(credential, "/")
+--- @param cred_str string e.g. AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request
+--- @return Credential|nil credential, string|nil err
+local function parse_credential(cred_str)
+    local credential_data = ngx_re_split(cred_str, "/")
     if (not credential_data) or #credential_data ~= 5 then
         return nil, "Bad Credential"
     end
 
+    --- @class Credential
+    --- @field access_key string e.g. AKIAIOSFODNN7EXAMPLE
+    --- @field date string e.g. 20130524
+    --- @field region string e.g. us-east-1
+    --- @field service string e.g. s3
     local credential = {
         access_key = credential_data[1],
         date       = credential_data[2],
@@ -369,11 +219,27 @@ local function parse_credential(credential)
 end
 
 
+--- get_params
+---
+--- @param ctx unknown
+--- @param conf unknown
+--- @return Parameters?, string? err
 local function get_params(ctx, conf)
     --- @class Parameters
-    --- @field host string
-    --- @field method string
-    --- TODO 补充 判空
+    --- @field host string the request host
+    --- @field method string the request method
+    --- @field uri string the request uri
+    --- @field query_string table<string, string?> the request query string
+    --- @field headers table<string, string?> the request headers
+    --- @field body string|nil the request body
+    --- @field algorithm string X-Amz-Algorithm, must be "AWS4-HMAC-SHA256"
+    --- @field credential Credential
+    --- @field signed_headers string[] X-Amz-SignedHeaders, Header is Lowercase
+    --- @field signed_headers_map table<string, string> X-Amz-SignedHeaders, Key is Lowercase
+    --- @field signature string X-Amz-Signature
+    --- @field expires integer? X-Amz-Expires
+    --- @field is_query_string_method boolean
+    --- @field date string X-Amz-Date
     local params = {
         host         = core.request.get_host(),
         method       = core.request.get_method(ctx),
@@ -382,68 +248,263 @@ local function get_params(ctx, conf)
         headers      = core.request.headers(ctx),
     }
 
-    local err
     if conf.max_req_body and conf.max_req_body > 0 then
+        local err
         params.body, err = core.request.get_body(conf.max_req_body, ctx)
         if err then
             return nil, "Exceed body limit size"
         end
     end
 
+    local signed_headers_str -- e.g. host;range;x-amz-content-sha256;x-amz-date
+    local credential_str     -- e.g. AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,
     if conf.enable_header_method and params.headers["Authorization"] then
         -- Using the Authorization Header
-        local auth_string = params.headers["Authorization"]
-        if #auth_string == 0 then
-            return nil, "Authorization header cannot be empty"
+        -- e.g. AWS4-HMAC-SHA256
+        --      Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,
+        --      SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,
+        --      Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41
+        local auth_header_str = params.headers["Authorization"]
+        if #auth_header_str == 0 then
+            return nil, "Authorization header cannot be empty: '" .. auth_header_str .. "'"
         end
-        local auth_data = ngx_re_match(auth_string,
-            [[([\w\-]+) (?:(?:Credential=([\w\-\/]+)|SignedHeaders=([\w;\-]+)|Signature=([\w\d]+))[, ]*)+]])
-
+        local auth_data = ngx_re_match(auth_header_str,
+            [[([\w\-]+) (?:(?:Credential=([\w\-\/]+)|SignedHeaders=([\w;\-]+)|Signature=([\w\d]+))[, ]*)+]], "oj")
         if (not auth_data) or #auth_data ~= 4 then
             return nil, "Bad Authorization Header"
         end
 
-        params.algorithm      = auth_data[1]
-        params.credential     = auth_data[2]
-        params.date           = params.headers[DATE_KEY]
-        params.signed_headers = auth_data[3]
-        params.signature      = auth_data[4]
+        params.algorithm              = auth_data[1]
+        credential_str                = auth_data[2]
+        signed_headers_str            = auth_data[3]
+        params.signature              = auth_data[4]
+
+        params.is_query_string_method = false
     elseif conf.enable_query_string_method and params.query_string[ALGORITHM_KEY] then
         -- Using Query Parameters
-        params.algorithm      = params.query_string[ALGORITHM_KEY]
-        params.credential     = params.query_string[CREDENTIAL_KEY]
-        params.date           = params.query_string[DATE_KEY]
-        params.signed_headers = params.query_string[SIGNED_HEADERS_KEY]
-        params.signature      = params.query_string[SIGNATURE_KEY]
+        params.algorithm   = params.query_string[ALGORITHM_KEY]
+        credential_str     = params.query_string[CREDENTIAL_KEY]
+        signed_headers_str = params.query_string[SIGNED_HEADERS_KEY]
+        params.signature   = params.query_string[SIGNATURE_KEY]
 
         core.log.info("params.expires: ", params.expires)
 
-        params.expires                = tonumber(params.query_string[EXPIRES_KEY]) --TODO test & schema
+        params.expires                = tonumber(params.query_string[EXPIRES_KEY])
         params.is_query_string_method = true
     else
         return nil, "Missing Authentication Token"
     end
 
-    params.signed_headers = params.signed_headers and ngx_re_split(params.signed_headers, ";")
-    params.credential, err = parse_credential(params.credential)
+    if (not credential_str) or #credential_str == 0 then
+        return nil, "Authorization header requires 'Credential' parameter"
+    end
+    local credential, err = parse_credential(credential_str)
     if err then
         return nil, err
+    end
+    assert(credential)
+    params.credential = credential
+
+    if (not signed_headers_str) or #signed_headers_str == 0 then
+        return nil, "Authorization header requires 'SignedHeaders' parameter"
+    end
+    local signed_headers, err = ngx_re_split(signed_headers_str, ";")
+    if err then
+        error(err)
+    end
+    assert(signed_headers)
+    params.signed_headers = signed_headers
+    params.signed_headers_map = {}
+    for _, header_name in pairs(params.signed_headers) do
+        params.signed_headers_map[header_name] = params.headers[header_name] or ""
     end
 
     if (not params.signature) or #params.signature == 0 then
         return nil, "Authorization header requires 'Signature' parameter"
     end
 
+    local date = params.headers[DATE_KEY] or params.query_string[DATE_KEY]
+    if not date then
+        return nil, "Missing header '" .. DATE_KEY .. "'"
+    end
+    params.date = date
+
     return params, nil
 end
 
 
+--- get_consumer
+---
+--- @param access_key string
+--- @return unknown? consumer, string? error
+local function get_consumer(access_key)
+    if not access_key then
+        return nil, "missing access key"
+    end
+
+    local consumer_conf = consumer.plugin(plugin_name)
+    if not consumer_conf then
+        return nil, "Missing related consumer"
+    end
+
+    local consumers = consumer.consumers_kv(plugin_name, consumer_conf, "access_key")
+    if not consumers then
+        return nil, "The security token included in the request is invalid."
+    end
+    local consumer = consumers[access_key]
+    if not consumer then
+        return nil, "The security token included in the request is invalid."
+    end
+
+    core.log.info("consumer: ", core.json.delay_encode(consumer))
+
+    return consumer, nil
+end
+
+
+--- validate
+---
+--- @param conf Config
+--- @param params Parameters
+--- @return unknown? consumer
+--- @return string? error
+local function validate(conf, params)
+    if params.algorithm ~= ALGO then
+        return nil, "algorithm '" .. params.algorithm .. "' is not supported"
+    end
+
+    if conf.host and #conf.host > 0 then
+        if (not params.host) or params.host ~= conf.host then
+            return nil, "Host dismatch, '" .. params.host .. "'"
+        end
+    end
+
+    if conf.region and #conf.region > 0 then
+        if (not params.credential.region) or params.credential.region ~= conf.region then
+            return nil, "Credential should be scoped to a valid Region, not '" .. params.credential.region .. "'"
+        end
+    end
+
+    if conf.service and #conf.service > 0 then
+        if (not params.credential.service) or params.credential.service ~= conf.service then
+            return nil, "Credential should be scoped to correct service: '" .. params.credential.service .. "'"
+        end
+    end
+
+    -- check headers
+    if not params.signed_headers_map[HOST_KEY:lower()] then
+        return nil, "header '" .. HOST_KEY .. "' is not signed"
+    end
+    if not params.signed_headers_map[DATE_KEY:lower()] then
+        if params.headers[DATE_KEY] then -- When X-Amz-Date is from Header (not from Query String)
+            return nil, "header '" .. DATE_KEY .. "' is not signed"
+        end
+    end
+    if conf.extra_must_sign_headers and #conf.extra_must_sign_headers > 0 then
+        for _, must in pairs(conf.extra_must_sign_headers) do
+            if not params.signed_headers_map[must:lower()] then
+                return nil, "extra header '" .. must .. "' must be signed"
+            end
+        end
+    end
+
+    -- check clock skew
+    local now = ngx_time()
+    local time_to_validate = utils.iso8601_to_timestamp(params.date)
+    local skew = now - time_to_validate
+    core.log.info("conf.clock_skew: ", conf.clock_skew)
+    if (conf.clock_skew and conf.clock_skew > 0) then
+        if params.date:sub(1, 8) ~= params.credential.date then
+            return nil, "Date in Credential scope does not match YYYYMMDD from ISO-8601 version of date from HTTP"
+        end
+
+        core.log.info("Clock skew: ", skew .. "=" .. now .. "-" .. time_to_validate)
+        if skew > conf.clock_skew then
+            return nil, "Signature expired: '" .. params.date .. "' is now earlier than '" .. now .. "'"
+        elseif skew < 0 then
+            return nil, "Signature not yet current: '" .. params.date .. "' is still later than '" .. now .. "'"
+        end
+    end
+
+    -- check X-Amz-Expires
+    if params.is_query_string_method then
+        if not params.expires then
+            return nil, "'X-Amz-Expires' is not present"
+        end
+
+        if conf.max_expires and conf.max_expires > 0 then
+            if params.expires > conf.max_expires then
+                return nil, "max_expires limited"
+            end
+        end
+
+        if abs(skew) > params.expires then
+            return nil, "Signature expired: '" .. params.date .. "' is now earlier than '" .. now .. "'"
+        end
+    end
+
+    -- get consumer
+    local consumer, err = get_consumer(params.credential.access_key)
+    if err or (not consumer) then
+        return nil, err
+    end
+
+    -- calc signature
+    local qs_to_signature = {}
+    if params.is_query_string_method then
+        qs_to_signature = {}
+        for _, qs_name in ipairs(params.query_string) do
+            if qs_name ~= ALGORITHM_KEY
+                and qs_name ~= CREDENTIAL_KEY
+                and qs_name ~= DATE_KEY
+                and qs_name ~= EXPIRES_KEY
+                and qs_name ~= SIGNED_HEADERS_KEY
+                and qs_name ~= SIGNATURE_KEY then
+                qs_to_signature[qs_name] = params.headers[qs_name]
+            end
+        end
+    end
+
+    --- @type ConsumerConfig
+    local consumer_auth_conf = consumer.auth_conf
+    local secret_key         = consumer_auth_conf and consumer_auth_conf.secret_key
+    assert(secret_key)
+    local request_signature   = params.signature
+    local generated_signature = utils.generate_signature(
+        params.method,
+        params.uri,
+        qs_to_signature,
+        params.signed_headers_map,
+        params.body,
+        secret_key,
+        time_to_validate,
+        params.credential.region,
+        params.credential.service
+    )
+
+    core.log.info("request_signature: ", request_signature,
+        " generated_signature: ", generated_signature)
+
+    if request_signature ~= generated_signature then
+        return nil, "The request signature we calculated does not match the signature you provided."
+    end
+
+    return consumer
+end
+
+
+--- rewrite
+---
+--- @param conf Config
+--- @param ctx unknown
+--- @return integer? code, table? body
 function _M.rewrite(conf, ctx)
     local params, err = get_params(ctx, conf)
     if err then
         core.log.warn("client request can't be validated: ", err)
         return 403, { message = err }
     end
+    assert(params)
 
     local validated_consumer, err = validate(conf, params)
     if not validated_consumer then
@@ -456,7 +517,14 @@ function _M.rewrite(conf, ctx)
     consumer.attach_consumer(ctx, validated_consumer, consumer_conf)
     core.log.info("hit aws-auth rewrite")
 
-    -- TODO keep headers
+    -- remove unsigned headers
+    if not conf.keep_unsigned_headers then
+        for key, _ in pairs(params.headers) do
+            if not params.signed_headers_map[key] then
+                core.request.set_header(ctx, key, nil)
+            end
+        end
+    end
 end
 
 return _M
