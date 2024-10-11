@@ -15,529 +15,302 @@
 -- limitations under the License.
 --
 
-local require              = require
-local ngx                  = ngx
-local ngx_time             = ngx.time
-local ngx_re               = require("ngx.re")
-local ngx_re_split         = ngx_re.split
-local ngx_re_match         = ngx.re.match
-local abs                  = math.abs
-local core                 = require("apisix.core")
-local core_schema          = require("apisix.core.schema")
-local consumer             = require("apisix.consumer")
-local pairs                = pairs
-local ipairs               = ipairs
+local require        = require
+local hmac           = require("resty.hmac")
+local resty_sha256   = require("resty.sha256")
+local hex_encode     = require("resty.string").to_hex
+local pairs          = pairs
+local tab_concat     = table.concat
+local tab_sort       = table.sort
+local tab_insert     = table.insert
+local ngx            = ngx
+local ngx_escape_uri = ngx.escape_uri
+local ngx_re_match   = ngx.re.match
+local ngx_re_gmatch  = ngx.re.gmatch
+local str_strip      = require("pl.stringx").strip
+local assert         = assert
+local error          = error
+local tonumber       = tonumber
+local os             = os
 
-local utils                = require("apisix.plugins.aws-auth.utils")
+local ALGO           = "AWS4-HMAC-SHA256"
 
-local HOST_KEY             = "Host"
-local ALGORITHM_KEY        = "X-Amz-Algorithm"
-local CREDENTIAL_KEY       = "X-Amz-Credential"
-local DATE_KEY             = "X-Amz-Date"
-local SIGNED_HEADERS_KEY   = "X-Amz-SignedHeaders"
-local SIGNATURE_KEY        = "X-Amz-Signature"
-local EXPIRES_KEY          = "X-Amz-Expires"
-local plugin_name          = "aws-auth"
-local DEFAULT_MAX_REQ_BODY = 1024 * 512
-local DEFAULT_CLOCK_SKEW   = 60 * 15
-local DEFAULT_MAX_EXPIRES  = 60 * 60 * 24 * 7
-local ALGO                 = "AWS4-HMAC-SHA256"
+local _M             = {}
 
 
---- @class Config
---- @field host string?
---- @field region string?
---- @field service string?
---- @field clock_skew integer?
---- @field extra_must_sign_headers string[]?
---- @field max_req_body integer?
---- @field enable_header_method boolean?
---- @field enable_query_string_method boolean?
---- @field max_expires integer?
---- @field keep_unsigned_headers boolean?
-
-local schema = {
-    type = "object",
-    properties = {
-        host                       = {
-            type = "string",
-            title = "Host to validate. Without validate if not provided.",
-            default = nil,
-        },
-        region                     = {
-            type = "string",
-            title = "Region to validate. Without validate if not provided.",
-            default = nil,
-        },
-        service                    = {
-            type    = "string",
-            title   = "Service to validate. Without validate if not provided.",
-            default = nil,
-        },
-        clock_skew                 = {
-            type    = "integer",
-            title   = "Clock skew allowed by the signature in seconds. "
-                .. "The default value is 900 seconds (15 minutes). "
-                .. "If `X-Amz-Date` is not in `must_sign_headers` parameter, an error will occur. "
-                .. "Setting it to 0 will skip checking the date (UNSAFE).",
-            default = DEFAULT_CLOCK_SKEW
-        },
-        extra_must_sign_headers    = {
-            type    = "array",
-            items   = {
-                type = "string"
-            },
-            title   = "The Request Headers that must be signed. "
-                .. "Case insensitive.",
-            default = nil
-        },
-        max_req_body               = {
-            type    = "integer",
-            title   = "Max request body size. "
-                .. "The default value is 512 KB.",
-            default = DEFAULT_MAX_REQ_BODY,
-        },
-        enable_header_method       = {
-            type    = "boolean",
-            title   = "Enable HTTP authorization header method. "
-                .. "The default is true.",
-            default = true,
-        },
-        enable_query_string_method = {
-            type    = "boolean",
-            title   = "Enable Query string parameters method. "
-                .. "The default is true.",
-            default = true,
-        },
-        max_expires                = {
-            type    = "integer",
-            title   = "Sets the maximum value allowed for the `X-Amz-Expires` parameter. "
-                .. "The default value is 604800 seconds (7 days). "
-                .. "Setting it to 0 will skip checking exprires limit (UNSAFE).",
-            default = DEFAULT_MAX_EXPIRES,
-        },
-        keep_unsigned_headers      = {
-            type    = "boolean",
-            title   = "Whether to keep the Unsigned Request Header. "
-                .. "The default is false.",
-            default = false,
-        },
-    },
-}
-
-
---- @class ConsumerConfig
---- @field access_key string?
---- @field secret_key string?
-
-local consumer_schema = {
-    type           = "object",
-    properties     = {
-        access_key = {
-            type = "string",
-        },
-        secret_key = {
-            type = "string",
-        },
-    },
-    encrypt_fields = { "access_key", "secret_key" },
-    required       = { "access_key", "secret_key" },
-}
-
-
-local _M = {
-    version         = 0.1,
-    priority        = 50,
-    type            = 'auth',
-    name            = plugin_name,
-    schema          = schema,
-    consumer_schema = consumer_schema,
-}
-
-
---- check_schema
+--- hmac256_bin
 ---
---- @param conf Config|ConsumerConfig|unknown
---- @param schema_type integer
---- @return boolean ok, string? err
-function _M.check_schema(conf, schema_type)
-    core.log.info("input conf: ", core.json.delay_encode(conf))
-
-    if schema_type == core_schema.TYPE_CONSUMER then
-        return core_schema.check(consumer_schema, conf)
-    else
-        return core_schema.check(schema, conf)
-    end
+--- @param key string
+--- @param msg string
+--- @return string hash_binary
+function _M.hmac256_bin(key, msg)
+    return hmac:new(key, hmac.ALGOS.SHA256):final(msg)
 end
 
---- parse_credential
+--- sha256
 ---
---- @param cred_str string e.g. AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request
---- @return Credential|nil credential, string|nil err
-local function parse_credential(cred_str)
-    local credential_data = ngx_re_split(cred_str, "/")
-    if (not credential_data) or #credential_data ~= 5 then
-        return nil, "Bad Credential"
-    end
-
-    --- @class Credential
-    --- @field access_key string e.g. AKIAIOSFODNN7EXAMPLE
-    --- @field date string e.g. 20130524
-    --- @field region string e.g. us-east-1
-    --- @field service string e.g. s3
-    local credential = {
-        access_key = credential_data[1],
-        date       = credential_data[2],
-        region     = credential_data[3],
-        service    = credential_data[4],
-    }
-
-    if (not credential.access_key) or #credential.access_key == 0 then
-        return nil, "access key missing"
-    end
-
-    if (not credential.date) or #credential.date == 0 then
-        return nil, "date missing"
-    end
-
-    if (not credential.region) or #credential.region == 0 then
-        return nil, "region missing"
-    end
-
-    if (not credential.service) or #credential.service == 0 then
-        return nil, "service missing"
-    end
-
-    local credential_aws4_request = credential_data[5]
-    if (not credential_aws4_request) or credential_aws4_request ~= "aws4_request" then
-        return nil, "Credential should be scoped with a valid terminator: 'aws4_request'"
-    end
-
-    return credential
+--- @param msg string
+--- @return string hex lowercase hex string
+function _M.sha256(msg)
+    local hash = resty_sha256:new()
+    assert(hash)
+    hash:update(msg)
+    local digest = hash:final()
+    return hex_encode(digest)
 end
 
-
---- get_params
+--- iso8601_to_timestamp
 ---
---- @param ctx unknown
---- @param conf unknown
---- @return Parameters?, string? err
-local function get_params(ctx, conf)
-    --- @class Parameters
-    --- @field host string the request host
-    --- @field method string the request method
-    --- @field uri string the request uri
-    --- @field query_string table<string, string?> the request query string
-    --- @field headers table<string, string?> the request headers
-    --- @field body string|nil the request body
-    --- @field algorithm string X-Amz-Algorithm, must be "AWS4-HMAC-SHA256"
-    --- @field credential Credential
-    --- @field signed_headers string[] X-Amz-SignedHeaders, Header is Lowercase
-    --- @field signed_headers_map table<string, string> X-Amz-SignedHeaders, Key is Lowercase
-    --- @field signature string X-Amz-Signature
-    --- @field expires integer? X-Amz-Expires
-    --- @field is_query_string_method boolean
-    --- @field date string X-Amz-Date
-    local params = {
-        host         = core.request.get_host(),
-        method       = core.request.get_method(ctx),
-        uri          = ctx.var.uri,
-        query_string = core.request.get_uri_args(ctx),
-        headers      = core.request.headers(ctx),
-    }
-
-    if conf.max_req_body and conf.max_req_body > 0 then
-        local err
-        params.body, err = core.request.get_body(conf.max_req_body, ctx)
-        if err then
-            return nil, "Exceed body limit size"
-        end
-    end
-
-    local signed_headers_str -- e.g. host;range;x-amz-content-sha256;x-amz-date
-    local credential_str     -- e.g. AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,
-    if conf.enable_header_method and params.headers["Authorization"] then
-        -- Using the Authorization Header
-        -- e.g. AWS4-HMAC-SHA256
-        --      Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,
-        --      SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,
-        --      Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41
-        local auth_header_str = params.headers["Authorization"]
-        if #auth_header_str == 0 then
-            return nil, "Authorization header cannot be empty: '" .. auth_header_str .. "'"
-        end
-        local signed_headers_regexp = "SignedHeaders=([\\w;\\-]+)"
-        local credential_regexp = "Credential=([\\w\\-\\/]+)"
-        local signature_regexp = "Signature=([\\w\\d]+)"
-        local regexps = signed_headers_regexp .. "|"
-            .. credential_regexp .. "|"
-            .. signature_regexp
-        local auth_data = ngx_re_match(auth_header_str,
-            "([\\w\\-]+) (?:(?:" .. regexps .. ")[, ]*)+",
-            "oj")
-        if (not auth_data) or #auth_data ~= 4 then
-            return nil, "Bad Authorization Header"
-        end
-
-        params.algorithm              = auth_data[1]
-        credential_str                = auth_data[2]
-        signed_headers_str            = auth_data[3]
-        params.signature              = auth_data[4]
-
-        params.is_query_string_method = false
-    elseif conf.enable_query_string_method and params.query_string[ALGORITHM_KEY] then
-        -- Using Query Parameters
-        params.algorithm   = params.query_string[ALGORITHM_KEY]
-        credential_str     = params.query_string[CREDENTIAL_KEY]
-        signed_headers_str = params.query_string[SIGNED_HEADERS_KEY]
-        params.signature   = params.query_string[SIGNATURE_KEY]
-
-        core.log.info("params.expires: ", params.expires)
-
-        params.expires                = tonumber(params.query_string[EXPIRES_KEY])
-        params.is_query_string_method = true
-    else
-        return nil, "Missing Authentication Token"
-    end
-
-    if (not credential_str) or #credential_str == 0 then
-        return nil, "Authorization header requires 'Credential' parameter"
-    end
-    local credential, err = parse_credential(credential_str)
-    if err then
-        return nil, err
-    end
-    assert(credential)
-    params.credential = credential
-
-    if (not signed_headers_str) or #signed_headers_str == 0 then
-        return nil, "Authorization header requires 'SignedHeaders' parameter"
-    end
-    local signed_headers, err = ngx_re_split(signed_headers_str, ";")
+--- yyyyMMddTHHmmssZ
+---
+--- e.g. 20160801T223241Z
+--- @param iso8601 string
+--- @return integer timestamp utc
+function _M.iso8601_to_timestamp(iso8601)
+    -- Extract date and time components from the ISO 8601 string
+    local match, err = ngx_re_match(iso8601, [[(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z]], "oj")
     if err then
         error(err)
     end
-    assert(signed_headers)
-    params.signed_headers = signed_headers
-    params.signed_headers_map = {}
-    for _, header_name in pairs(params.signed_headers) do
-        params.signed_headers_map[header_name] = params.headers[header_name] or ""
-    end
 
-    if (not params.signature) or #params.signature == 0 then
-        return nil, "Authorization header requires 'Signature' parameter"
-    end
+    -- Create a table compatible with os.time
+    local datetime = {
+        year = tonumber(match[1]),
+        month = tonumber(match[2]),
+        day = tonumber(match[3]),
+        hour = tonumber(match[4]),
+        min = tonumber(match[5]),
+        sec = tonumber(match[6])
+    }
 
-    local date = params.headers[DATE_KEY] or params.query_string[DATE_KEY]
-    if not date then
-        return nil, "Missing header '" .. DATE_KEY .. "'"
-    end
-    params.date = date
+    -- Convert to Unix timestamp
+    local offset = os.time() - os.time(os.date("!*t"))
+    local timestamp = os.time(datetime) + offset
 
-    return params, nil
+    return timestamp
 end
 
-
---- get_consumer
+--- aws_uri_encode
 ---
---- @param access_key string
---- @return unknown? consumer, string? error
-local function get_consumer(access_key)
-    if not access_key then
-        return nil, "missing access key"
+--- Encode a string for use in the path of a URL; uses URLEncoder.encode,
+--- (which encodes a string for use in the query portion of a URL), then
+--- applies some postfilters to fix things up per the RFC. Can optionally
+--- handle strings which are meant to encode a path (ie include '/'es
+--- which should NOT be escaped).
+--- @param value string the value to encode
+--- @param path boolean true if the value is intended to represent a path
+--- @return string encoded the encoded value
+function _M.aws_uri_encode(value, path)
+    if (not value) or #value == 0 then
+        return ""
     end
 
-    local consumer_conf = consumer.plugin(plugin_name)
-    if not consumer_conf then
-        return nil, "Missing related consumer"
+    local encoded = ngx_escape_uri(value)
+
+    -- match
+    -- !
+    -- *
+    -- (
+    -- )
+    -- '
+    -- %2F                 / when path encode
+    --
+    -- other to pass
+    -- (%[A-Z0-9]{2})      uri encoded
+    -- [A-Za-z0-9\-\._\~]  reserved characters
+
+    local iterator, err = ngx_re_gmatch(encoded,
+        "!|\\*|\\(|\\)|'|%2F|(%[A-Z0-9]{2})|[A-Za-z0-9\\-\\._\\~]"
+        , "oj")
+    if not iterator then
+        error(err)
     end
 
-    local consumers = consumer.consumers_kv(plugin_name, consumer_conf, "access_key")
-    if not consumers then
-        return nil, "The security token included in the request is invalid."
-    end
-    local consumer = consumers[access_key]
-    if not consumer then
-        return nil, "The security token included in the request is invalid."
+    local replacement = {}
+
+    while true do
+        local m, err = iterator()
+        if err then
+            error(err)
+        end
+
+        if not m then
+            -- no match found (any more)
+            break
+        end
+
+        -- found a match
+        if m[0] == "!" then
+            tab_insert(replacement, "%21")
+        elseif m[0] == "*" then
+            tab_insert(replacement, "%2A")
+        elseif m[0] == "(" then
+            tab_insert(replacement, "%28")
+        elseif m[0] == ")" then
+            tab_insert(replacement, "%29")
+        elseif m[0] == "'" then
+            tab_insert(replacement, "%27")
+        elseif path and m[0] == "%2F" then
+            tab_insert(replacement, "/")
+        else
+            tab_insert(replacement, m[0])
+        end
     end
 
-    core.log.info("consumer: ", core.json.delay_encode(consumer))
-
-    return consumer, nil
+    return tab_concat(replacement)
 end
 
-
---- validate
+--- build_canonical_uri
 ---
---- @param conf Config
---- @param params Parameters
---- @return unknown? consumer
---- @return string? error
-local function validate(conf, params)
-    if params.algorithm ~= ALGO then
-        return nil, "algorithm '" .. params.algorithm .. "' is not supported"
+--- e.g. input "foo///bar" output "/foo/bar"
+--- @param uri string
+--- @return string canonical_uri
+function _M.build_canonical_uri(uri)
+    if uri == "" then
+        return "/"
     end
 
-    if conf.host and #conf.host > 0 then
-        if (not params.host) or params.host ~= conf.host then
-            return nil, "Host dismatch, '" .. params.host .. "'"
+    if uri ~= "/" then
+        -- rm suffix slash
+        if uri:sub(-1, -1) == "/" then
+            uri = uri:sub(1, -2)
+        end
+        -- add prefix slash
+        if uri:sub(1, 1) ~= "/" then
+            uri = "/" .. uri
         end
     end
 
-    if conf.region and #conf.region > 0 then
-        if (not params.credential.region)
-            or params.credential.region ~= conf.region then
-            return nil, "Credential should be scoped to a valid Region, not '"
-                .. params.credential.region .. "'"
-        end
-    end
-
-    if conf.service and #conf.service > 0 then
-        if (not params.credential.service)
-            or params.credential.service ~= conf.service then
-            return nil, "Credential should be scoped to correct service: '"
-                .. params.credential.service .. "'"
-        end
-    end
-
-    -- check headers
-    if not params.signed_headers_map[HOST_KEY:lower()] then
-        return nil, "header '" .. HOST_KEY .. "' is not signed"
-    end
-    if not params.signed_headers_map[DATE_KEY:lower()] then
-        if params.headers[DATE_KEY] then -- When X-Amz-Date is from Header (not from Query String)
-            return nil, "header '" .. DATE_KEY .. "' is not signed"
-        end
-    end
-    if conf.extra_must_sign_headers and #conf.extra_must_sign_headers > 0 then
-        for _, must in pairs(conf.extra_must_sign_headers) do
-            if not params.signed_headers_map[must:lower()] then
-                return nil, "extra header '" .. must .. "' must be signed"
-            end
-        end
-    end
-
-    -- check clock skew
-    local now = ngx_time()
-    local time_to_validate = utils.iso8601_to_timestamp(params.date)
-    local skew = now - time_to_validate
-    core.log.info("conf.clock_skew: ", conf.clock_skew)
-    if (conf.clock_skew and conf.clock_skew > 0) then
-        if params.date:sub(1, 8) ~= params.credential.date then
-            return nil, "Date in Credential scope does not match YYYYMMDD "
-                .. "from ISO-8601 version of date from HTTP"
-        end
-
-        core.log.info("Clock skew: ", skew .. "=" .. now .. "-" .. time_to_validate)
-        if skew > conf.clock_skew then
-            return nil, "Signature expired: '"
-                .. params.date .. "' is now earlier than '" .. now .. "'"
-        elseif skew < 0 then
-            return nil, "Signature not yet current: '"
-                .. params.date .. "' is still later than '" .. now .. "'"
-        end
-    end
-
-    -- check X-Amz-Expires
-    if params.is_query_string_method then
-        if not params.expires then
-            return nil, "'X-Amz-Expires' is not present"
-        end
-
-        if conf.max_expires and conf.max_expires > 0 then
-            if params.expires > conf.max_expires then
-                return nil, "max_expires limited"
-            end
-        end
-
-        if abs(skew) > params.expires then
-            return nil, "Signature expired: '"
-                .. params.date .. "' is now earlier than '" .. now .. "'"
-        end
-    end
-
-    -- get consumer
-    local consumer, err = get_consumer(params.credential.access_key)
-    if err or (not consumer) then
-        return nil, err
-    end
-
-    -- calc signature
-    local qs_to_signature = {}
-    if params.is_query_string_method then
-        qs_to_signature = {}
-        for _, qs_name in ipairs(params.query_string) do
-            if qs_name ~= ALGORITHM_KEY
-                and qs_name ~= CREDENTIAL_KEY
-                and qs_name ~= DATE_KEY
-                and qs_name ~= EXPIRES_KEY
-                and qs_name ~= SIGNED_HEADERS_KEY
-                and qs_name ~= SIGNATURE_KEY then
-                qs_to_signature[qs_name] = params.headers[qs_name]
-            end
-        end
-    end
-
-    --- @type ConsumerConfig
-    local consumer_auth_conf = consumer.auth_conf
-    local secret_key         = consumer_auth_conf and consumer_auth_conf.secret_key
-    assert(secret_key)
-    local request_signature   = params.signature
-    local generated_signature = utils.generate_signature(
-        params.method,
-        params.uri,
-        qs_to_signature,
-        params.signed_headers_map,
-        params.body,
-        secret_key,
-        time_to_validate,
-        params.credential.region,
-        params.credential.service
-    )
-
-    core.log.info("request_signature: ", request_signature,
-        " generated_signature: ", generated_signature)
-
-    if request_signature ~= generated_signature then
-        return nil, "The request signature we calculated does not match the signature you provided."
-    end
-
-    return consumer
+    return _M.aws_uri_encode(uri, true)
 end
 
-
---- rewrite
+--- build_canonical_query_string
 ---
---- @param conf Config
---- @param ctx unknown
---- @return integer? code, table? body
-function _M.rewrite(conf, ctx)
-    local params, err = get_params(ctx, conf)
-    if err then
-        core.log.warn("client request can't be validated: ", err)
-        return 403, { message = err }
+--- @param query_string table<string, string>
+--- @return string canonical_query_string
+function _M.build_canonical_query_string(query_string)
+    local canonical_qs_table = {}
+    local canonical_qs_i = 0
+    for k, v in pairs(query_string) do
+        canonical_qs_i = canonical_qs_i + 1
+        canonical_qs_table[canonical_qs_i] = _M.aws_uri_encode(k, false)
+            .. "=" .. _M.aws_uri_encode(v, false)
     end
-    assert(params)
 
-    local validated_consumer, err = validate(conf, params)
-    if not validated_consumer then
-        core.log.warn("client request can't be validated: ", err)
-        return 403, { message = err }
+    tab_sort(canonical_qs_table)
+    local canonical_qs = tab_concat(canonical_qs_table, "&")
+
+    return canonical_qs
+end
+
+--- build_canonical_headers
+---
+--- @param headers table<string, string>
+--- @return string canonical_headers, string signed_headers
+function _M.build_canonical_headers(headers)
+    local canonical_headers_table, signed_headers_list = {}, {}
+    local signed_headers_i = 0
+    for k, v in pairs(headers) do
+        k = k:lower()
+
+        signed_headers_i = signed_headers_i + 1
+        signed_headers_list[signed_headers_i] = k
+        -- strip starting and trailing spaces including strip multiple spaces into single space
+        canonical_headers_table[k] = str_strip(v)
     end
-    core.log.info("validated_consumer: ", core.json.delay_encode(validated_consumer))
+    tab_sort(signed_headers_list)
 
-    local consumer_conf = consumer.plugin(plugin_name)
-    consumer.attach_consumer(ctx, validated_consumer, consumer_conf)
-    core.log.info("hit aws-auth rewrite")
-
-    -- remove unsigned headers
-    if not conf.keep_unsigned_headers then
-        for key, _ in pairs(params.headers) do
-            if not params.signed_headers_map[key] then
-                core.request.set_header(ctx, key, nil)
-            end
-        end
+    for i = 1, #signed_headers_list do
+        local k = signed_headers_list[i]
+        canonical_headers_table[i] = k .. ":" .. canonical_headers_table[k] .. "\n"
     end
+
+    local canonical_headers = tab_concat(canonical_headers_table, nil)
+    local signed_headers = tab_concat(signed_headers_list, ";")
+
+    return canonical_headers, signed_headers
+end
+
+--- create_signing_key
+--- @param secret_key string
+--- @param datestamp string
+--- @param region string
+--- @param service string
+--- @return string binary
+function _M.create_signing_key(secret_key, datestamp, region, service)
+    local date_key                = _M.hmac256_bin("AWS4" .. secret_key, datestamp)
+    local date_region_key         = _M.hmac256_bin(date_key, region)
+    local date_region_service_key = _M.hmac256_bin(date_region_key, service)
+    local signing_key             = _M.hmac256_bin(date_region_service_key, "aws4_request")
+    return signing_key
+end
+
+--- generate_signature
+---
+--- @param method string
+--- @param uri string
+--- @param query_string table<string, string>? Should not include Signature like 'X-Amz-Signature'
+--- @param headers table<string, string>? Should not include Signature like 'X-Amz-Signature'
+--- @param body string?
+--- @param secret_key string
+--- @param time integer UTC seconds timestamp
+--- @param region string
+--- @param service string
+--- @return string signature
+function _M.generate_signature(method, uri, query_string,
+                               headers, body, secret_key, time, region, service)
+    -- Step 1: Create a canonical request
+
+    -- computing canonical uri
+    local canonical_uri = _M.build_canonical_uri(uri)
+
+    -- computing canonical query string
+    local canonical_qs = ""
+    if query_string then
+        canonical_qs = _M.build_canonical_query_string(query_string)
+    end
+
+    -- computing canonical headers
+    local canonical_headers, signed_headers = "", ""
+    if headers then
+        canonical_headers, signed_headers = _M.build_canonical_headers(headers)
+    end
+
+    -- default no body hash
+    local body_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    if body and body ~= "" then
+        body_hash = _M.sha256(body)
+    end
+
+    local canonical_request = method:upper() .. "\n"
+        .. canonical_uri .. "\n"
+        .. (canonical_qs or "") .. "\n"
+        .. canonical_headers .. "\n"
+        .. signed_headers .. "\n"
+        .. body_hash
+
+    -- Step 2: Create a hash of the canonical request
+    local hashed_canonical_request = _M.sha256(canonical_request)
+
+
+    -- Step 3: Create a string to sign
+    local amzdate   = os.date("!%Y%m%dT%H%M%SZ", time) -- ISO 8601 20130524T000000Z
+    local datestamp = os.date("!%Y%m%d", time)         -- Date w/o time, used in credential scope
+
+
+    local credential_scope = datestamp .. "/" .. region .. "/" .. service .. "/aws4_request"
+    local string_to_sign   = ALGO .. "\n"
+        .. amzdate .. "\n"
+        .. credential_scope .. "\n"
+        .. hashed_canonical_request
+
+
+    -- Step 4: Calculate the signature
+    ---@cast datestamp string
+    local signing_key = _M.create_signing_key(secret_key, datestamp, region, service)
+    local signature   = hex_encode(_M.hmac256_bin(signing_key, string_to_sign))
+
+    return signature
 end
 
 return _M
